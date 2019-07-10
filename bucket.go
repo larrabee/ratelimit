@@ -9,6 +9,6 @@ type Bucket interface {
 	TakeMaxDuration(count int64, maxWait time.Duration) (time.Duration, bool)
 	TakeAvailable(count int64) int64
 	Available() int64
-	Capacity()
-	Rate()
+	Capacity() int64
+	Rate() float64
 }
