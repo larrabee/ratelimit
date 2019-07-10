@@ -171,7 +171,7 @@ var availTests = []struct {
 
 func (rateLimitSuite) TestTake(c *gc.C) {
 	for i, test := range takeTests {
-		tb := NewBucket(test.fillInterval, test.capacity)
+		tb, _ := NewBucket(test.fillInterval, test.capacity)
 		for j, req := range test.reqs {
 			d, ok := tb.take(tb.startTime+int64(req.time), req.count, infinityDuration)
 			c.Assert(ok, gc.Equals, true)
@@ -184,7 +184,7 @@ func (rateLimitSuite) TestTake(c *gc.C) {
 
 func (rateLimitSuite) TestTakeMaxDuration(c *gc.C) {
 	for i, test := range takeTests {
-		tb := NewBucket(test.fillInterval, test.capacity)
+		tb, _ := NewBucket(test.fillInterval, test.capacity)
 		for j, req := range test.reqs {
 			if req.expectWait > 0 {
 				d, ok := tb.take(tb.startTime+int64(req.time), req.count, req.expectWait-1)
@@ -287,7 +287,7 @@ var takeAvailableTests = []struct {
 
 func (rateLimitSuite) TestTakeAvailable(c *gc.C) {
 	for i, test := range takeAvailableTests {
-		tb := NewBucket(test.fillInterval, test.capacity)
+		tb, _ := NewBucket(test.fillInterval, test.capacity)
 		for j, req := range test.reqs {
 			d := tb.takeAvailable(tb.startTime+int64(req.time), req.count)
 			if d != req.expect {
@@ -298,10 +298,49 @@ func (rateLimitSuite) TestTakeAvailable(c *gc.C) {
 }
 
 func (rateLimitSuite) TestPanics(c *gc.C) {
-	c.Assert(func() { NewBucket(0, 1) }, gc.PanicMatches, "token bucket fill interval is not > 0")
-	c.Assert(func() { NewBucket(-2, 1) }, gc.PanicMatches, "token bucket fill interval is not > 0")
-	c.Assert(func() { NewBucket(1, 0) }, gc.PanicMatches, "token bucket capacity is not > 0")
-	c.Assert(func() { NewBucket(1, -2) }, gc.PanicMatches, "token bucket capacity is not > 0")
+	_, err := NewBucket(0, 1)
+	switch err.(type) {
+	case *ValueError:
+		if err.(*ValueError).Field != FieldFillInterval {
+			c.Fatalf("got error for incorrect field", )
+		}
+		break
+	default:
+		c.Fatalf("got invalid error", )
+	}
+
+	_, err = NewBucket(-2, 1)
+	switch err.(type) {
+	case *ValueError:
+		if err.(*ValueError).Field != FieldFillInterval {
+			c.Fatalf("got error for incorrect field", )
+		}
+		break
+	default:
+		c.Fatalf("got invalid error", )
+	}
+
+	_, err = NewBucket(1, 0)
+	switch err.(type) {
+	case *ValueError:
+		if err.(*ValueError).Field != FieldCapacity {
+			c.Fatalf("got error for incorrect field", )
+		}
+		break
+	default:
+		c.Fatalf("got invalid error", )
+	}
+
+	_, err = NewBucket(1, -2)
+	switch err.(type) {
+	case *ValueError:
+		if err.(*ValueError).Field != FieldCapacity {
+			c.Fatalf("got error for incorrect field", )
+		}
+		break
+	default:
+		c.Fatalf("got invalid error", )
+	}
 }
 
 func isCloseTo(x, y, tolerance float64) bool {
@@ -309,22 +348,22 @@ func isCloseTo(x, y, tolerance float64) bool {
 }
 
 func (rateLimitSuite) TestRate(c *gc.C) {
-	tb := NewBucket(1, 1)
+	tb, _ := NewBucket(1, 1)
 	if !isCloseTo(tb.Rate(), 1e9, 0.00001) {
 		c.Fatalf("got %v want 1e9", tb.Rate())
 	}
-	tb = NewBucket(2*time.Second, 1)
+	tb, _ = NewBucket(2*time.Second, 1)
 	if !isCloseTo(tb.Rate(), 0.5, 0.00001) {
 		c.Fatalf("got %v want 0.5", tb.Rate())
 	}
-	tb = NewBucketWithQuantum(100*time.Millisecond, 1, 5)
+	tb, _ = NewBucketWithQuantum(100*time.Millisecond, 1, 5)
 	if !isCloseTo(tb.Rate(), 50, 0.00001) {
 		c.Fatalf("got %v want 50", tb.Rate())
 	}
 }
 
 func checkRate(c *gc.C, rate float64) {
-	tb := NewBucketWithRate(rate, 1<<62)
+	tb, _ := NewBucketWithRate(rate, 1<<62)
 	if !isCloseTo(tb.Rate(), rate, rateMargin) {
 		c.Fatalf("got %g want %v", tb.Rate(), rate)
 	}
@@ -367,7 +406,7 @@ func (rateLimitSuite) TestNewBucketWithRate(c *gc.C) {
 
 func TestAvailable(t *testing.T) {
 	for i, tt := range availTests {
-		tb := NewBucket(tt.fillInterval, tt.capacity)
+		tb, _ := NewBucket(tt.fillInterval, tt.capacity)
 		if tb.Capacity() != tt.capacity {
 			t.Fatalf("#%d: %s, take = %d, want = %d",
 				i, tt.about, tb.Capacity(), tt.capacity)
@@ -387,7 +426,7 @@ func TestAvailable(t *testing.T) {
 }
 
 func BenchmarkWait(b *testing.B) {
-	tb := NewBucket(1, 16*1024)
+	tb, _ := NewBucket(1, 16*1024)
 	for i := b.N - 1; i >= 0; i-- {
 		tb.Wait(1)
 	}
@@ -400,7 +439,7 @@ func BenchmarkNewBucket(b *testing.B) {
 }
 
 func BenchmarkTakeParallel(b *testing.B) {
-	tb := NewBucket(1, 16*1024)
+	tb, _ := NewBucket(1, 16*1024)
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
 			tb.Take(1)
@@ -409,7 +448,7 @@ func BenchmarkTakeParallel(b *testing.B) {
 }
 
 func BenchmarkTakeAvailableParallel(b *testing.B) {
-	tb := NewBucket(1, 16*1024)
+	tb, _ := NewBucket(1, 16*1024)
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
 			tb.TakeAvailable(1)

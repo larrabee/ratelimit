@@ -9,7 +9,6 @@ package ratelimit
 
 import (
 	"math"
-	"strconv"
 	"sync"
 	"time"
 	_ "unsafe"
@@ -75,7 +74,7 @@ type RealBucket struct {
 // rate of one token every fillInterval, up to the given
 // maximum capacity. Both arguments must be
 // positive. The bucket is initially full.
-func NewBucket(fillInterval time.Duration, capacity int64) *RealBucket {
+func NewBucket(fillInterval time.Duration, capacity int64) (*RealBucket, error) {
 	return NewBucketWithQuantum(fillInterval, capacity, 1)
 }
 
@@ -88,10 +87,13 @@ const rateMargin = 0.01
 // maximum capacity. Because of limited clock resolution,
 // at high rates, the actual rate may be up to 1% different from the
 // specified rate.
-func NewBucketWithRate(rate float64, capacity int64) *RealBucket {
+func NewBucketWithRate(rate float64, capacity int64) (*RealBucket, error) {
 	// Use the same bucket each time through the loop
 	// to save allocations.
-	tb := NewBucketWithQuantum(1, capacity, 1)
+	tb, err := NewBucketWithQuantum(1, capacity, 1)
+	if err != nil {
+		return nil, err
+	}
 	for quantum := int64(1); quantum < 1<<50; quantum = nextQuantum(quantum) {
 		fillInterval := time.Duration(1e9 * float64(quantum) / rate)
 		if fillInterval <= 0 {
@@ -100,24 +102,24 @@ func NewBucketWithRate(rate float64, capacity int64) *RealBucket {
 		tb.fillInterval = fillInterval
 		tb.quantum = quantum
 		if diff := math.Abs(tb.Rate() - rate); diff/rate <= rateMargin {
-			return tb
+			return tb, nil
 		}
 	}
-	panic("cannot find suitable quantum for " + strconv.FormatFloat(rate, 'g', -1, 64))
+	return nil, &QuantumError{rate}
 }
 
 // NewBucketWithQuantum is similar to NewBucket, but allows
 // the specification of the quantum size - quantum tokens
 // are added every fillInterval.
-func NewBucketWithQuantum(fillInterval time.Duration, capacity, quantum int64) *RealBucket {
+func NewBucketWithQuantum(fillInterval time.Duration, capacity, quantum int64) (*RealBucket, error) {
 	if fillInterval <= 0 {
-		panic("token bucket fill interval is not > 0")
+		return nil, &ValueError{FieldFillInterval, fillInterval.Nanoseconds()}
 	}
 	if capacity <= 0 {
-		panic("token bucket capacity is not > 0")
+		return nil, &ValueError{FieldCapacity, capacity}
 	}
 	if quantum <= 0 {
-		panic("token bucket quantum is not > 0")
+		return nil, &ValueError{FieldQuantum, quantum}
 	}
 	return &RealBucket{
 		startTime:       nanotime(),
@@ -126,7 +128,7 @@ func NewBucketWithQuantum(fillInterval time.Duration, capacity, quantum int64) *
 		capacity:        capacity,
 		quantum:         quantum,
 		availableTokens: capacity,
-	}
+	}, nil
 }
 
 // nextQuantum returns the next quantum to try after q.
