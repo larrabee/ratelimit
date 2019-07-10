@@ -173,7 +173,7 @@ func (rateLimitSuite) TestTake(c *gc.C) {
 	for i, test := range takeTests {
 		tb := NewBucket(test.fillInterval, test.capacity)
 		for j, req := range test.reqs {
-			d, ok := tb.take(tb.startTime.Add(req.time), req.count, infinityDuration)
+			d, ok := tb.take(tb.startTime+int64(req.time), req.count, infinityDuration)
 			c.Assert(ok, gc.Equals, true)
 			if d != req.expectWait {
 				c.Fatalf("test %d.%d, %s, got %v want %v", i, j, test.about, d, req.expectWait)
@@ -187,11 +187,11 @@ func (rateLimitSuite) TestTakeMaxDuration(c *gc.C) {
 		tb := NewBucket(test.fillInterval, test.capacity)
 		for j, req := range test.reqs {
 			if req.expectWait > 0 {
-				d, ok := tb.take(tb.startTime.Add(req.time), req.count, req.expectWait-1)
+				d, ok := tb.take(tb.startTime+int64(req.time), req.count, req.expectWait-1)
 				c.Assert(ok, gc.Equals, false)
 				c.Assert(d, gc.Equals, time.Duration(0))
 			}
-			d, ok := tb.take(tb.startTime.Add(req.time), req.count, req.expectWait)
+			d, ok := tb.take(tb.startTime+int64(req.time), req.count, req.expectWait)
 			c.Assert(ok, gc.Equals, true)
 			if d != req.expectWait {
 				c.Fatalf("test %d.%d, %s, got %v want %v", i, j, test.about, d, req.expectWait)
@@ -289,7 +289,7 @@ func (rateLimitSuite) TestTakeAvailable(c *gc.C) {
 	for i, test := range takeAvailableTests {
 		tb := NewBucket(test.fillInterval, test.capacity)
 		for j, req := range test.reqs {
-			d := tb.takeAvailable(tb.startTime.Add(req.time), req.count)
+			d := tb.takeAvailable(tb.startTime+int64(req.time), req.count)
 			if d != req.expect {
 				c.Fatalf("test %d.%d, %s, got %v want %v", i, j, test.about, d, req.expect)
 			}
@@ -344,7 +344,7 @@ func checkRate(c *gc.C, rate float64) {
 	}
 }
 
-func (rateLimitSuite) NewBucketWithRate(c *gc.C) {
+func (rateLimitSuite) TestNewBucketWithRate(c *gc.C) {
 	for rate := float64(1); rate < 1e6; rate += 7 {
 		checkRate(c, rate)
 	}
@@ -368,13 +368,17 @@ func (rateLimitSuite) NewBucketWithRate(c *gc.C) {
 func TestAvailable(t *testing.T) {
 	for i, tt := range availTests {
 		tb := NewBucket(tt.fillInterval, tt.capacity)
+		if tb.Capacity() != tt.capacity {
+			t.Fatalf("#%d: %s, take = %d, want = %d",
+				i, tt.about, tb.Capacity(), tt.capacity)
+		}
 		if c := tb.takeAvailable(tb.startTime, tt.take); c != tt.take {
 			t.Fatalf("#%d: %s, take = %d, want = %d", i, tt.about, c, tt.take)
 		}
 		if c := tb.available(tb.startTime); c != tt.expectCountAfterTake {
 			t.Fatalf("#%d: %s, after take, available = %d, want = %d", i, tt.about, c, tt.expectCountAfterTake)
 		}
-		if c := tb.available(tb.startTime.Add(tt.sleep)); c != tt.expectCountAfterSleep {
+		if c := tb.available(tb.startTime + int64(tt.sleep)); c != tt.expectCountAfterSleep {
 			t.Fatalf("#%d: %s, after some time it should fill in new tokens, available = %d, want = %d",
 				i, tt.about, c, tt.expectCountAfterSleep)
 		}
@@ -393,4 +397,22 @@ func BenchmarkNewBucket(b *testing.B) {
 	for i := b.N - 1; i >= 0; i-- {
 		NewBucketWithRate(4e18, 1<<62)
 	}
+}
+
+func BenchmarkTakeParallel(b *testing.B) {
+	tb := NewBucket(1, 16*1024)
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			tb.Take(1)
+		}
+	})
+}
+
+func BenchmarkTakeAvailableParallel(b *testing.B) {
+	tb := NewBucket(1, 16*1024)
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			tb.TakeAvailable(1)
+		}
+	})
 }

@@ -12,11 +12,12 @@ import (
 	"strconv"
 	"sync"
 	"time"
+	_ "unsafe"
 )
 
 // The algorithm that this implementation uses does computational work
 // only when tokens are removed from the bucket, and that work completes
-// in short, bounded-constant time (Bucket.Wait benchmarks at 175ns on
+// in short, bounded-constant time (RealBucket.Wait benchmarks at 175ns on
 // my laptop).
 //
 // Time is measured in equal measured ticks, a given interval
@@ -39,14 +40,12 @@ import (
 // it means we can easily represent situations like "a person gets
 // five tokens an hour, replenished on the hour".
 
-// Bucket represents a token bucket that fills at a predetermined rate.
-// Methods on Bucket may be called concurrently.
-type Bucket struct {
-	clock Clock
-
+// RealBucket represents a token bucket that fills at a predetermined rate.
+// Methods on RealBucket may be called concurrently.
+type RealBucket struct {
 	// startTime holds the moment when the bucket was
 	// first created and ticks began.
-	startTime time.Time
+	startTime int64
 
 	// capacity holds the overall capacity of the bucket.
 	capacity int64
@@ -76,14 +75,8 @@ type Bucket struct {
 // rate of one token every fillInterval, up to the given
 // maximum capacity. Both arguments must be
 // positive. The bucket is initially full.
-func NewBucket(fillInterval time.Duration, capacity int64) *Bucket {
-	return NewBucketWithClock(fillInterval, capacity, nil)
-}
-
-// NewBucketWithClock is identical to NewBucket but injects a testable clock
-// interface.
-func NewBucketWithClock(fillInterval time.Duration, capacity int64, clock Clock) *Bucket {
-	return NewBucketWithQuantumAndClock(fillInterval, capacity, 1, clock)
+func NewBucket(fillInterval time.Duration, capacity int64) *RealBucket {
+	return NewBucketWithQuantum(fillInterval, capacity, 1)
 }
 
 // rateMargin specifes the allowed variance of actual
@@ -95,16 +88,10 @@ const rateMargin = 0.01
 // maximum capacity. Because of limited clock resolution,
 // at high rates, the actual rate may be up to 1% different from the
 // specified rate.
-func NewBucketWithRate(rate float64, capacity int64) *Bucket {
-	return NewBucketWithRateAndClock(rate, capacity, nil)
-}
-
-// NewBucketWithRateAndClock is identical to NewBucketWithRate but injects a
-// testable clock interface.
-func NewBucketWithRateAndClock(rate float64, capacity int64, clock Clock) *Bucket {
+func NewBucketWithRate(rate float64, capacity int64) *RealBucket {
 	// Use the same bucket each time through the loop
 	// to save allocations.
-	tb := NewBucketWithQuantumAndClock(1, capacity, 1, clock)
+	tb := NewBucketWithQuantum(1, capacity, 1)
 	for quantum := int64(1); quantum < 1<<50; quantum = nextQuantum(quantum) {
 		fillInterval := time.Duration(1e9 * float64(quantum) / rate)
 		if fillInterval <= 0 {
@@ -119,6 +106,29 @@ func NewBucketWithRateAndClock(rate float64, capacity int64, clock Clock) *Bucke
 	panic("cannot find suitable quantum for " + strconv.FormatFloat(rate, 'g', -1, 64))
 }
 
+// NewBucketWithQuantum is similar to NewBucket, but allows
+// the specification of the quantum size - quantum tokens
+// are added every fillInterval.
+func NewBucketWithQuantum(fillInterval time.Duration, capacity, quantum int64) *RealBucket {
+	if fillInterval <= 0 {
+		panic("token bucket fill interval is not > 0")
+	}
+	if capacity <= 0 {
+		panic("token bucket capacity is not > 0")
+	}
+	if quantum <= 0 {
+		panic("token bucket quantum is not > 0")
+	}
+	return &RealBucket{
+		startTime:       nanotime(),
+		latestTick:      0,
+		fillInterval:    fillInterval,
+		capacity:        capacity,
+		quantum:         quantum,
+		availableTokens: capacity,
+	}
+}
+
 // nextQuantum returns the next quantum to try after q.
 // We grow the quantum exponentially, but slowly, so we
 // get a good fit in the lower numbers.
@@ -130,45 +140,11 @@ func nextQuantum(q int64) int64 {
 	return q1
 }
 
-// NewBucketWithQuantum is similar to NewBucket, but allows
-// the specification of the quantum size - quantum tokens
-// are added every fillInterval.
-func NewBucketWithQuantum(fillInterval time.Duration, capacity, quantum int64) *Bucket {
-	return NewBucketWithQuantumAndClock(fillInterval, capacity, quantum, nil)
-}
-
-// NewBucketWithQuantumAndClock is like NewBucketWithQuantum, but
-// also has a clock argument that allows clients to fake the passing
-// of time. If clock is nil, the system clock will be used.
-func NewBucketWithQuantumAndClock(fillInterval time.Duration, capacity, quantum int64, clock Clock) *Bucket {
-	if clock == nil {
-		clock = realClock{}
-	}
-	if fillInterval <= 0 {
-		panic("token bucket fill interval is not > 0")
-	}
-	if capacity <= 0 {
-		panic("token bucket capacity is not > 0")
-	}
-	if quantum <= 0 {
-		panic("token bucket quantum is not > 0")
-	}
-	return &Bucket{
-		clock:           clock,
-		startTime:       clock.Now(),
-		latestTick:      0,
-		fillInterval:    fillInterval,
-		capacity:        capacity,
-		quantum:         quantum,
-		availableTokens: capacity,
-	}
-}
-
 // Wait takes count tokens from the bucket, waiting until they are
 // available.
-func (tb *Bucket) Wait(count int64) {
+func (tb *RealBucket) Wait(count int64) {
 	if d := tb.Take(count); d > 0 {
-		tb.clock.Sleep(d)
+		time.Sleep(d)
 	}
 }
 
@@ -177,10 +153,10 @@ func (tb *Bucket) Wait(count int64) {
 // for no greater than maxWait. It reports whether
 // any tokens have been removed from the bucket
 // If no tokens have been removed, it returns immediately.
-func (tb *Bucket) WaitMaxDuration(count int64, maxWait time.Duration) bool {
+func (tb *RealBucket) WaitMaxDuration(count int64, maxWait time.Duration) bool {
 	d, ok := tb.TakeMaxDuration(count, maxWait)
 	if d > 0 {
-		tb.clock.Sleep(d)
+		time.Sleep(d)
 	}
 	return ok
 }
@@ -193,10 +169,10 @@ const infinityDuration time.Duration = 0x7fffffffffffffff
 //
 // Note that if the request is irrevocable - there is no way to return
 // tokens to the bucket once this method commits us to taking them.
-func (tb *Bucket) Take(count int64) time.Duration {
+func (tb *RealBucket) Take(count int64) time.Duration {
 	tb.mu.Lock()
-	defer tb.mu.Unlock()
-	d, _ := tb.take(tb.clock.Now(), count, infinityDuration)
+	d, _ := tb.take(nanotime(), count, infinityDuration)
+	tb.mu.Unlock()
 	return d
 }
 
@@ -209,24 +185,26 @@ func (tb *Bucket) Take(count int64) time.Duration {
 // otherwise it returns the time that the caller should
 // wait until the tokens are actually available, and reports
 // true.
-func (tb *Bucket) TakeMaxDuration(count int64, maxWait time.Duration) (time.Duration, bool) {
+func (tb *RealBucket) TakeMaxDuration(count int64, maxWait time.Duration) (time.Duration, bool) {
 	tb.mu.Lock()
-	defer tb.mu.Unlock()
-	return tb.take(tb.clock.Now(), count, maxWait)
+	t, ok := tb.take(nanotime(), count, maxWait)
+	tb.mu.Unlock()
+	return t, ok
 }
 
 // TakeAvailable takes up to count immediately available tokens from the
 // bucket. It returns the number of tokens removed, or zero if there are
 // no available tokens. It does not block.
-func (tb *Bucket) TakeAvailable(count int64) int64 {
+func (tb *RealBucket) TakeAvailable(count int64) int64 {
 	tb.mu.Lock()
-	defer tb.mu.Unlock()
-	return tb.takeAvailable(tb.clock.Now(), count)
+	avail := tb.takeAvailable(nanotime(), count)
+	tb.mu.Unlock()
+	return avail
 }
 
 // takeAvailable is the internal version of TakeAvailable - it takes the
 // current time as an argument to enable easy testing.
-func (tb *Bucket) takeAvailable(now time.Time, count int64) int64 {
+func (tb *RealBucket) takeAvailable(now int64, count int64) int64 {
 	if count <= 0 {
 		return 0
 	}
@@ -247,32 +225,33 @@ func (tb *Bucket) takeAvailable(now time.Time, count int64) int64 {
 // tokens from the buffer will succeed, as the number of available
 // tokens could have changed in the meantime. This method is intended
 // primarily for metrics reporting and debugging.
-func (tb *Bucket) Available() int64 {
-	return tb.available(tb.clock.Now())
+func (tb *RealBucket) Available() int64 {
+	return tb.available(nanotime())
 }
 
 // available is the internal version of available - it takes the current time as
 // an argument to enable easy testing.
-func (tb *Bucket) available(now time.Time) int64 {
+func (tb *RealBucket) available(now int64) int64 {
 	tb.mu.Lock()
-	defer tb.mu.Unlock()
 	tb.adjustavailableTokens(tb.currentTick(now))
-	return tb.availableTokens
+	t := tb.availableTokens
+	tb.mu.Unlock()
+	return t
 }
 
 // Capacity returns the capacity that the bucket was created with.
-func (tb *Bucket) Capacity() int64 {
+func (tb *RealBucket) Capacity() int64 {
 	return tb.capacity
 }
 
 // Rate returns the fill rate of the bucket, in tokens per second.
-func (tb *Bucket) Rate() float64 {
+func (tb *RealBucket) Rate() float64 {
 	return 1e9 * float64(tb.quantum) / float64(tb.fillInterval)
 }
 
 // take is the internal version of Take - it takes the current time as
 // an argument to enable easy testing.
-func (tb *Bucket) take(now time.Time, count int64, maxWait time.Duration) (time.Duration, bool) {
+func (tb *RealBucket) take(now int64, count int64, maxWait time.Duration) (time.Duration, bool) {
 	if count <= 0 {
 		return 0, true
 	}
@@ -291,8 +270,8 @@ func (tb *Bucket) take(now time.Time, count int64, maxWait time.Duration) (time.
 	// endTick holds the tick when all the requested tokens will
 	// become available.
 	endTick := tick + (-avail+tb.quantum-1)/tb.quantum
-	endTime := tb.startTime.Add(time.Duration(endTick) * tb.fillInterval)
-	waitTime := endTime.Sub(now)
+	endTime := tb.startTime + (endTick * int64(tb.fillInterval))
+	waitTime := time.Duration(endTime - now)
 	if waitTime > maxWait {
 		return 0, false
 	}
@@ -302,14 +281,14 @@ func (tb *Bucket) take(now time.Time, count int64, maxWait time.Duration) (time.
 
 // currentTick returns the current time tick, measured
 // from tb.startTime.
-func (tb *Bucket) currentTick(now time.Time) int64 {
-	return int64(now.Sub(tb.startTime) / tb.fillInterval)
+func (tb *RealBucket) currentTick(now int64) int64 {
+	return (now - tb.startTime) / int64(tb.fillInterval)
 }
 
 // adjustavailableTokens adjusts the current number of tokens
 // available in the bucket at the given time, which must
 // be in the future (positive) with respect to tb.latestTick.
-func (tb *Bucket) adjustavailableTokens(tick int64) {
+func (tb *RealBucket) adjustavailableTokens(tick int64) {
 	if tb.availableTokens >= tb.capacity {
 		return
 	}
@@ -321,24 +300,5 @@ func (tb *Bucket) adjustavailableTokens(tick int64) {
 	return
 }
 
-// Clock represents the passage of time in a way that
-// can be faked out for tests.
-type Clock interface {
-	// Now returns the current time.
-	Now() time.Time
-	// Sleep sleeps for at least the given duration.
-	Sleep(d time.Duration)
-}
-
-// realClock implements Clock in terms of standard time functions.
-type realClock struct{}
-
-// Now implements Clock.Now by calling time.Now.
-func (realClock) Now() time.Time {
-	return time.Now()
-}
-
-// Now implements Clock.Sleep by calling time.Sleep.
-func (realClock) Sleep(d time.Duration) {
-	time.Sleep(d)
-}
+//go:linkname nanotime runtime.nanotime
+func nanotime() int64
