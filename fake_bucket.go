@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-type FakeBucket struct {}
+type FakeBucket struct{}
 
 // NewBucket returns a new fake token bucket.
 func NewFakeBucket() *FakeBucket {

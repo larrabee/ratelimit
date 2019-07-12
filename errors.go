@@ -20,7 +20,7 @@ const (
 	FieldQuantum
 )
 
-var fieldMap = map[Field]string{FieldFillInterval: "Interval", FieldCapacity:"Capacity", FieldQuantum:"Quantum"}
+var fieldMap = map[Field]string{FieldFillInterval: "Interval", FieldCapacity: "Capacity", FieldQuantum: "Quantum"}
 
 type ValueError struct {
 	Field Field

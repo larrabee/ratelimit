@@ -302,44 +302,44 @@ func (rateLimitSuite) TestPanics(c *gc.C) {
 	switch err.(type) {
 	case *ValueError:
 		if err.(*ValueError).Field != FieldFillInterval {
-			c.Fatalf("got error for incorrect field", )
+			c.Fatalf("got error for incorrect field")
 		}
 		break
 	default:
-		c.Fatalf("got invalid error", )
+		c.Fatalf("got invalid error")
 	}
 
 	_, err = NewBucket(-2, 1)
 	switch err.(type) {
 	case *ValueError:
 		if err.(*ValueError).Field != FieldFillInterval {
-			c.Fatalf("got error for incorrect field", )
+			c.Fatalf("got error for incorrect field")
 		}
 		break
 	default:
-		c.Fatalf("got invalid error", )
+		c.Fatalf("got invalid error")
 	}
 
 	_, err = NewBucket(1, 0)
 	switch err.(type) {
 	case *ValueError:
 		if err.(*ValueError).Field != FieldCapacity {
-			c.Fatalf("got error for incorrect field", )
+			c.Fatalf("got error for incorrect field")
 		}
 		break
 	default:
-		c.Fatalf("got invalid error", )
+		c.Fatalf("got invalid error")
 	}
 
 	_, err = NewBucket(1, -2)
 	switch err.(type) {
 	case *ValueError:
 		if err.(*ValueError).Field != FieldCapacity {
-			c.Fatalf("got error for incorrect field", )
+			c.Fatalf("got error for incorrect field")
 		}
 		break
 	default:
-		c.Fatalf("got invalid error", )
+		c.Fatalf("got invalid error")
 	}
 }
 
